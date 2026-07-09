@@ -1,0 +1,15 @@
+{
+  "name": "russell-ftd-server",
+  "version": "3.0.0",
+  "description": "RUSSELL FTD messaging server with PostgreSQL persistence",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}
