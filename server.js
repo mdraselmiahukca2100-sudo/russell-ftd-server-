@@ -370,6 +370,15 @@ const routes = {
     json(res, 200, { ok: true });
   },
 
+  "POST /api/delete-account": async (req, res, body, me) => {
+    /* Permanently delete the user and all data they've shared.
+       Deleting the user row cascades to tokens, chat_members, statuses,
+       and status_views (ON DELETE CASCADE). Messages are removed explicitly. */
+    await q("DELETE FROM messages WHERE from_id = $1", [me.id]);
+    await q("DELETE FROM users WHERE id = $1", [me.id]);
+    json(res, 200, { ok: true });
+  },
+
   "POST /api/signal": async (req, res, body, me) => {
     const to = Number(body.to);
     const exists = await q("SELECT 1 FROM users WHERE id = $1", [to]);
