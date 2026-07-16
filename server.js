@@ -91,6 +91,23 @@ async function initDb() {
     user_id INTEGER NOT NULL,
     PRIMARY KEY (status_id, user_id)
   )`);
+  /* User-Generated-Content safety (App Store Guideline 1.2) */
+  await q(`CREATE TABLE IF NOT EXISTS blocks (
+    blocker_id INTEGER NOT NULL,
+    blocked_id INTEGER NOT NULL,
+    ts BIGINT NOT NULL,
+    PRIMARY KEY (blocker_id, blocked_id)
+  )`);
+  await q(`CREATE TABLE IF NOT EXISTS reports (
+    id SERIAL PRIMARY KEY,
+    reporter_id INTEGER NOT NULL,
+    reported_id INTEGER,
+    chat_id INTEGER,
+    message_id INTEGER,
+    reason TEXT,
+    handled BOOLEAN NOT NULL DEFAULT false,
+    ts BIGINT NOT NULL
+  )`);
   console.log("Database schema ready.");
 }
 
@@ -183,6 +200,17 @@ function msgOut(m) {
   return { id: m.id, from: m.from_id, fromName: m.from_name, text: m.body || "", img: m.img || null, ts: Number(m.ts) };
 }
 
+/* Returns all user ids that `meId` should not see, in either direction:
+   people I blocked, and people who blocked me. */
+async function blockedIds(meId) {
+  const rows = await q(
+    "SELECT blocked_id AS id FROM blocks WHERE blocker_id = $1 " +
+    "UNION SELECT blocker_id AS id FROM blocks WHERE blocked_id = $1",
+    [meId]
+  );
+  return rows.map(r => Number(r.id));
+}
+
 /* ---------------- Routes ---------------- */
 const routes = {
 
@@ -194,6 +222,8 @@ const routes = {
       return json(res, 400, { error: "Username: 3-20 chars, letters/numbers/._ only" });
     if (password.length < 4)
       return json(res, 400, { error: "Password must be at least 4 characters" });
+    if (body.agree !== true)
+      return json(res, 400, { error: "You must accept the Terms of Use to create an account" });
     const exists = await q("SELECT 1 FROM users WHERE username = $1", [username]);
     if (exists.length) return json(res, 409, { error: "Username already taken" });
     const rows = await q(
@@ -218,7 +248,11 @@ const routes = {
   },
 
   "GET /api/users": async (req, res, body, me) => {
-    const rows = await q("SELECT id, username, name FROM users WHERE id <> $1 ORDER BY name", [me.id]);
+    const blocked = await blockedIds(me.id);
+    const rows = await q(
+      "SELECT id, username, name FROM users WHERE id <> $1 AND NOT (id = ANY($2::int[])) ORDER BY name",
+      [me.id, blocked]
+    );
     json(res, 200, { users: rows.map(publicUser) });
   },
 
@@ -227,8 +261,16 @@ const routes = {
       "SELECT c.* FROM chats c JOIN chat_members cm ON cm.chat_id = c.id WHERE cm.user_id = $1",
       [me.id]
     );
+    const blocked = new Set(await blockedIds(me.id));
     const list = [];
-    for (const c of chatRows) list.push(await chatSummary(c, me));
+    for (const c of chatRows) {
+      const summary = await chatSummary(c, me);
+      if (!summary.isGroup) {
+        const other = summary.members.find(m => m.id !== me.id);
+        if (other && blocked.has(other.id)) continue; // hide blocked 1:1 chats
+      }
+      list.push(summary);
+    }
     list.sort((a, b) => b.lastTs - a.lastTs);
     json(res, 200, { chats: list });
   },
@@ -273,9 +315,10 @@ const routes = {
     const member = await q("SELECT 1 FROM chat_members WHERE chat_id = $1 AND user_id = $2", [chatId, me.id]);
     if (!member.length) return json(res, 404, { error: "Chat not found" });
     const after = Number(query.after || 0);
+    const blocked = await blockedIds(me.id);
     const rows = await q(
-      "SELECT * FROM messages WHERE chat_id = $1 AND ts > $2 ORDER BY ts ASC LIMIT 200",
-      [chatId, after]
+      "SELECT * FROM messages WHERE chat_id = $1 AND ts > $2 AND NOT (from_id = ANY($3::int[])) ORDER BY ts ASC LIMIT 200",
+      [chatId, after, blocked]
     );
     const newestRows = await q("SELECT MAX(ts) AS m FROM messages WHERE chat_id = $1", [chatId]);
     const newest = newestRows[0].m;
@@ -377,6 +420,53 @@ const routes = {
     await q("DELETE FROM messages WHERE from_id = $1", [me.id]);
     await q("DELETE FROM users WHERE id = $1", [me.id]);
     json(res, 200, { ok: true });
+  },
+
+  /* ---- User-Generated-Content safety (Guideline 1.2) ---- */
+
+  "POST /api/report": async (req, res, body, me) => {
+    /* Flag objectionable content or an abusive user. Stored for moderation. */
+    const reportedId = body.reportedId ? Number(body.reportedId) : null;
+    const chatId = body.chatId ? Number(body.chatId) : null;
+    const messageId = body.messageId ? Number(body.messageId) : null;
+    const reason = String(body.reason || "").slice(0, 500);
+    await q(
+      "INSERT INTO reports(reporter_id, reported_id, chat_id, message_id, reason, ts) VALUES($1,$2,$3,$4,$5,$6)",
+      [me.id, reportedId, chatId, messageId, reason, Date.now()]
+    );
+    json(res, 200, { ok: true });
+  },
+
+  "POST /api/block": async (req, res, body, me) => {
+    /* Block an abusive user. Their messages disappear from this user's feed
+       instantly, and the block is logged so the developer is notified. */
+    const targetId = Number(body.targetId);
+    const exists = await q("SELECT 1 FROM users WHERE id = $1", [targetId]);
+    if (!exists.length) return json(res, 400, { error: "No such user" });
+    if (targetId === me.id) return json(res, 400, { error: "You cannot block yourself" });
+    await q(
+      "INSERT INTO blocks(blocker_id, blocked_id, ts) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+      [me.id, targetId, Date.now()]
+    );
+    /* Notify developer/moderation of the block + any provided reason. */
+    await q(
+      "INSERT INTO reports(reporter_id, reported_id, reason, ts) VALUES($1,$2,$3,$4)",
+      [me.id, targetId, String(body.reason || "User blocked as abusive").slice(0, 500), Date.now()]
+    );
+    json(res, 200, { ok: true });
+  },
+
+  "POST /api/unblock": async (req, res, body, me) => {
+    await q("DELETE FROM blocks WHERE blocker_id = $1 AND blocked_id = $2", [me.id, Number(body.targetId)]);
+    json(res, 200, { ok: true });
+  },
+
+  "GET /api/blocks": async (req, res, body, me) => {
+    const rows = await q(
+      "SELECT u.id, u.username, u.name FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.blocker_id = $1 ORDER BY u.name",
+      [me.id]
+    );
+    json(res, 200, { blocked: rows.map(publicUser) });
   },
 
   "POST /api/signal": async (req, res, body, me) => {
