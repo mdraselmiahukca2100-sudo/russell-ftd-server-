@@ -158,10 +158,14 @@
       <input type="text" id="authUser" placeholder="Username" autocapitalize="none" autocomplete="username">
       <input type="text" id="authName" placeholder="Display name (shown to others)" class="hidden">
       <input type="password" id="authPass" placeholder="Password" autocomplete="current-password">
+      <label id="agreeRow" class="hidden" style="display:flex;align-items:flex-start;gap:8px;margin:2px 0 12px;font-size:12.5px;color:var(--text-2);text-align:left;line-height:1.45">
+        <input type="checkbox" id="agreeChk" style="width:auto;margin:2px 0 0;flex-shrink:0">
+        <span>I agree to the <a href="#" id="termsLink" style="color:var(--green-dark);font-weight:700">Terms of Use</a> and understand there is <b>zero tolerance</b> for objectionable content or abusive users.</span>
+      </label>
       <button class="big-btn" id="authBtn">Log in</button>
       <button class="link-btn" id="authSwitch">New here? Create an account</button>
     </div>
-    <div class="hint">Real accounts, real messages, real calls.</div>
+    <div class="hint">Real accounts, real messages, real calls.<br><a href="#" id="termsLink2" style="color:var(--green-dark);font-weight:600">Terms of Use &amp; Community Guidelines</a></div>
   </div>
 
   <!-- Main -->
@@ -200,6 +204,7 @@
       </div>
       <button class="icon-btn" id="videoCallBtn" title="Video call">&#128249;</button>
       <button class="icon-btn" id="voiceCallBtn" title="Voice call">&#128222;</button>
+      <button class="icon-btn" id="chatMenuBtn" title="Report or block">&#8942;</button>
     </div>
     <div id="msgArea"></div>
     <div id="typingBar"></div>
@@ -353,8 +358,40 @@
     $("authBtn").textContent = registerMode ? "Register" : "Log in";
     $("authSwitch").textContent = registerMode ? "Have an account? Log in" : "New here? Create an account";
     $("authName").classList.toggle("hidden", !registerMode);
+    $("agreeRow").classList.toggle("hidden", !registerMode);
     $("authErr").textContent = "";
   });
+
+  /* Terms of Use / EULA (Guideline 1.2) */
+  function showTerms(e){
+    if (e) e.preventDefault();
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, "Terms of Use & Community Guidelines"));
+    var body = el("div");
+    body.style.cssText = "font-size:13px;color:var(--text);line-height:1.55;max-height:52vh;overflow-y:auto";
+    body.innerHTML =
+      "<p>By creating an account and using RUSSELL FTD, you agree to these Terms.</p>" +
+      "<p style='margin-top:10px'><b>Zero tolerance for objectionable content and abusive behavior.</b> " +
+      "The following are strictly prohibited: harassment, bullying, threats, hate speech, " +
+      "sexual or violent content, nudity, spam, impersonation, and any illegal content.</p>" +
+      "<p style='margin-top:10px'>You are solely responsible for the content you post. " +
+      "You can <b>report</b> objectionable content and <b>block</b> abusive users at any time " +
+      "using the menu (⋮) inside any chat.</p>" +
+      "<p style='margin-top:10px'>We review every report and <b>act within 24 hours</b> — " +
+      "removing offending content and ejecting users who violate these Terms. " +
+      "Violations may result in immediate and permanent account termination.</p>" +
+      "<p style='margin-top:10px'>By tapping Register you confirm you accept these Terms.</p>";
+    card.appendChild(body);
+    var actions = el("div", "modal-actions");
+    var close = el("button", "btn primary", "Got it");
+    close.addEventListener("click", closeModal);
+    actions.appendChild(close);
+    card.appendChild(actions);
+    $("modal").classList.add("open");
+  }
+  $("termsLink").addEventListener("click", showTerms);
+  $("termsLink2").addEventListener("click", showTerms);
   $("authBtn").addEventListener("click", doAuth);
   $("authPass").addEventListener("keydown", function(e){ if (e.key === "Enter") doAuth(); });
 
@@ -363,8 +400,12 @@
     if (url) BASE = url;
     if (!BASE){ $("authErr").textContent = "Enter the server address"; return; }
     store("ftd_base", BASE);
+    if (registerMode && !$("agreeChk").checked){
+      $("authErr").textContent = "Please accept the Terms of Use to continue";
+      return;
+    }
     var body = { username: $("authUser").value, password: $("authPass").value };
-    if (registerMode) body.name = $("authName").value;
+    if (registerMode){ body.name = $("authName").value; body.agree = true; }
     $("authErr").textContent = "";
     $("authBtn").disabled = true;
     api("POST", registerMode ? "/api/register" : "/api/login", body)
@@ -401,6 +442,14 @@
     var info = el("div", null, ME.name + " (@" + ME.username + ")");
     info.style.cssText = "font-size:15px;margin-bottom:18px";
     card.appendChild(info);
+    var blocked = el("button", "btn", "Blocked users");
+    blocked.style.cssText = "background:var(--bg);color:var(--text);width:100%;margin-bottom:12px;text-align:left;padding:12px 14px";
+    blocked.addEventListener("click", openBlockedList);
+    card.appendChild(blocked);
+    var termsBtn = el("button", "btn", "Terms of Use & Guidelines");
+    termsBtn.style.cssText = "background:var(--bg);color:var(--text);width:100%;margin-bottom:12px;text-align:left;padding:12px 14px";
+    termsBtn.addEventListener("click", showTerms);
+    card.appendChild(termsBtn);
     var del = el("button", "btn", "Delete my account");
     del.style.cssText = "background:var(--danger);color:#fff;width:100%";
     del.addEventListener("click", confirmDeleteAccount);
@@ -445,6 +494,45 @@
     actions.appendChild(cancel);
     actions.appendChild(confirmBtn);
     card.appendChild(actions);
+  }
+
+  function openBlockedList(){
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, "Blocked users"));
+    var listWrap = el("div");
+    listWrap.style.cssText = "max-height:50vh;overflow-y:auto;margin-bottom:8px";
+    card.appendChild(listWrap);
+    var actions = el("div", "modal-actions");
+    var close = el("button", "btn ghost", "Close");
+    close.addEventListener("click", closeModal);
+    actions.appendChild(close);
+    card.appendChild(actions);
+    $("modal").classList.add("open");
+    api("GET", "/api/blocks").then(function(d){
+      listWrap.innerHTML = "";
+      if (!d.blocked.length){
+        var e2 = el("div", null, "You haven't blocked anyone.");
+        e2.style.cssText = "font-size:14px;color:var(--text-2);padding:8px 0";
+        listWrap.appendChild(e2);
+        return;
+      }
+      d.blocked.forEach(function(u){
+        var r = el("div");
+        r.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)";
+        r.appendChild(el("span", null, u.name + " (@" + u.username + ")"));
+        var ub = el("button", "btn", "Unblock");
+        ub.style.cssText = "background:var(--green);color:#fff;padding:6px 12px;font-size:13px";
+        ub.addEventListener("click", function(){
+          ub.disabled = true;
+          api("POST", "/api/unblock", { targetId: u.id })
+            .then(function(){ r.remove(); refreshChats(); refreshContacts(); toast("Unblocked"); })
+            .catch(function(e){ ub.disabled = false; toast(e.message); });
+        });
+        r.appendChild(ub);
+        listWrap.appendChild(r);
+      });
+    }).catch(function(e){ toast(e.message); });
   }
 
   /* ---------- tabs ---------- */
@@ -744,6 +832,121 @@
     refreshChats();
   });
 
+  /* ---------- report / block (Guideline 1.2) ---------- */
+  $("chatMenuBtn").addEventListener("click", openChatMenu);
+
+  function menuButton(label, color, handler){
+    var b = el("button", "btn", label);
+    b.style.cssText = "width:100%;text-align:left;background:var(--bg);color:" + (color || "var(--text)") + ";margin-bottom:10px;padding:12px 14px";
+    b.addEventListener("click", handler);
+    return b;
+  }
+
+  function openChatMenu(){
+    if (!activeChat) return;
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, activeChat.name));
+    card.appendChild(menuButton("⚑ Report", "var(--text)", reportFlow));
+    if (!activeChat.isGroup){
+      card.appendChild(menuButton("🚫 Block " + activeChat.name, "var(--danger)", blockFlow));
+    }
+    var actions = el("div", "modal-actions");
+    var close = el("button", "btn ghost", "Cancel");
+    close.addEventListener("click", closeModal);
+    actions.appendChild(close);
+    card.appendChild(actions);
+    $("modal").classList.add("open");
+  }
+
+  function reportFlow(){
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, "Report"));
+    var p = el("div", null, "Tell us what's wrong. Our team reviews every report and acts within 24 hours.");
+    p.style.cssText = "font-size:13px;color:var(--text-2);margin-bottom:12px;line-height:1.5";
+    card.appendChild(p);
+    var ta = document.createElement("textarea");
+    ta.rows = 3; ta.maxLength = 500;
+    ta.placeholder = "Reason (e.g. spam, harassment, objectionable content)";
+    card.appendChild(ta);
+    var actions = el("div", "modal-actions");
+    var cancel = el("button", "btn ghost", "Cancel");
+    cancel.addEventListener("click", closeModal);
+    var ok = el("button", "btn primary", "Submit report");
+    ok.addEventListener("click", function(){
+      var target = activeChat.isGroup ? null : otherMemberId(activeChat);
+      ok.disabled = true;
+      api("POST", "/api/report", { reportedId: target, chatId: activeChat.id, reason: ta.value.trim() })
+        .then(function(){ closeModal(); toast("Report submitted. Thank you."); })
+        .catch(function(e){ ok.disabled = false; toast(e.message); });
+    });
+    actions.appendChild(cancel); actions.appendChild(ok);
+    card.appendChild(actions);
+  }
+
+  function blockFlow(){
+    var target = otherMemberId(activeChat);
+    var name = activeChat.name;
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, "Block " + name + "?"));
+    var p = el("div", null, "You will no longer receive messages from " + name + ", and their messages will be removed from your chats immediately. This also alerts our moderation team.");
+    p.style.cssText = "font-size:13.5px;color:var(--text-2);margin-bottom:16px;line-height:1.5";
+    card.appendChild(p);
+    var actions = el("div", "modal-actions");
+    var cancel = el("button", "btn ghost", "Cancel");
+    cancel.addEventListener("click", closeModal);
+    var ok = el("button", "btn", "Block");
+    ok.style.cssText = "background:var(--danger);color:#fff";
+    ok.addEventListener("click", function(){
+      ok.disabled = true;
+      api("POST", "/api/block", { targetId: target })
+        .then(function(){
+          closeModal();
+          $("chatView").classList.remove("open");
+          stopChatPolling();
+          activeChat = null;
+          refreshChats(); refreshContacts();
+          toast(name + " blocked");
+        })
+        .catch(function(e){ ok.disabled = false; toast(e.message); });
+    });
+    actions.appendChild(cancel); actions.appendChild(ok);
+    card.appendChild(actions);
+  }
+
+  function reportMessage(m){
+    var card = $("modalCard");
+    card.innerHTML = "";
+    card.appendChild(el("h3", null, "Report message"));
+    var q1 = el("div", null, "Report this message from " + m.fromName + " as objectionable?");
+    q1.style.cssText = "font-size:14px;color:var(--text-2);margin-bottom:8px";
+    card.appendChild(q1);
+    var quote = el("div", null, m.text ? "“" + m.text.slice(0, 140) + "”" : "[photo]");
+    quote.style.cssText = "font-size:13px;background:var(--bg);padding:8px 10px;border-radius:8px;margin-bottom:14px;word-break:break-word";
+    card.appendChild(quote);
+    var actions = el("div", "modal-actions");
+    var cancel = el("button", "btn ghost", "Cancel");
+    cancel.addEventListener("click", closeModal);
+    var ok = el("button", "btn", "Report");
+    ok.style.cssText = "background:var(--danger);color:#fff";
+    ok.addEventListener("click", function(){
+      ok.disabled = true;
+      api("POST", "/api/report", {
+        reportedId: m.from,
+        chatId: activeChat ? activeChat.id : null,
+        messageId: m.id,
+        reason: "Objectionable message: " + (m.text || "[photo]").slice(0, 200)
+      })
+        .then(function(){ closeModal(); toast("Reported. We review within 24 hours."); })
+        .catch(function(e){ ok.disabled = false; toast(e.message); });
+    });
+    actions.appendChild(cancel); actions.appendChild(ok);
+    card.appendChild(actions);
+    $("modal").classList.add("open");
+  }
+
   function otherMemberId(chat){
     var m = chat.members.filter(function(x){ return x.id !== ME.id; })[0];
     return m ? m.id : null;
@@ -789,9 +992,26 @@
     }
   }
 
+  function addLongPress(node, cb){
+    var timer = null;
+    function start(){ timer = setTimeout(function(){ timer = null; cb(); }, 550); }
+    function cancel(){ if (timer){ clearTimeout(timer); timer = null; } }
+    node.addEventListener("touchstart", start, { passive: true });
+    node.addEventListener("touchend", cancel);
+    node.addEventListener("touchmove", cancel);
+    node.addEventListener("mousedown", start);
+    node.addEventListener("mouseup", cancel);
+    node.addEventListener("mouseleave", cancel);
+    node.addEventListener("contextmenu", function(e){ e.preventDefault(); cancel(); cb(); });
+  }
+
   function msgEl(m){
     var out = m.from === ME.id;
     var d = el("div","msg " + (out ? "out" : "in"));
+    if (!out){
+      d.title = "Press and hold to report";
+      addLongPress(d, function(){ reportMessage(m); });
+    }
     if (!out && activeChat && activeChat.isGroup){
       var s = el("div","sender", m.fromName);
       s.style.color = colorFor(m.fromName);
